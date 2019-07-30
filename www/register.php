@@ -1,0 +1,297 @@
+<?php
+include("../vendor/autoload.php");
+include("../common.php");
+
+use Base64Url\Base64Url;
+use CBOR\CBOREncoder;
+
+session_start();
+
+// Considering a single account here...
+$user_name   = "jd@example.edu"; // intended for display, SURFconext ePPN
+$displayName = "John Doe";  // intended for display, SURFconext displayName
+if( !isset($_SESSION['user_id'])) {
+    error_log("generating new user handle");
+    $user_id = random_bytes(16);  // A user handle is an opaque byte sequence with a maximum size of 64 bytes. 
+    $_SESSION['user_id'] = $user_id;
+}
+$user_id = $_SESSION['user_id'];
+error_log("user id: " . bin2hex($user_id));
+
+if( $_POST['credId'] ) { // new registration with credId, clientDataJSON, and attestationObject
+    error_log(print_r($_POST,true));
+
+    // clientDataJSON, containing type, challenge, and origin
+    // The client data represents the contextual bindings of both the WebAuthn Relying Party and the client.
+    $clientDataJSON = hex2bin($_POST['clientDataJSON']);
+    $clientData = json_decode($clientDataJSON,true);
+    error_log(print_r($clientData,true));
+    assert($clientData['type'] === 'webauthn.create');
+    assert($clientData['origin'] === $_SERVER['HTTP_ORIGIN']);
+    $challenge = $clientData['challenge'];
+    assert( Base64Url::decode($challenge) === $_SESSION['challenge'] );
+    // unset($_SESSION['challenge']);
+
+    // attestationObject, containing fmt, attStmt, authData
+    $attestationObject = CBOREncoder::decode(hex2bin($_POST['attestationObject']),true);
+    error_log("attestationObject has properties: " . implode(",",array_keys($attestationObject)));
+    error_log("fmt=".$attestationObject['fmt']);
+    assert( in_array($attestationObject['fmt'], ["none", "packed", "fido-u2f"]) );	// only consider packed and fido-u2f for now, ignoring tpm, android-key, android-safetynet, none
+
+    // Attestation Statement
+    $attStmt = (array) $attestationObject['attStmt'];
+    error_log("attStmt has properties: " . implode(",",array_keys($attStmt)));
+
+    // The authenticator data structure encodes contextual bindings made by the authenticator 
+    $authData = $attestationObject['authData']->get_byte_string();
+    error_log("authData: " . bin2hex($authData));
+
+    // todo: move to library functions
+
+    // parse $authData
+    $s = $authData; // copy $authData for destruction
+
+    $rpIdHash = shiftn($s,32);
+    error_log('rpIdHash = ' . bin2hex($rpIdHash));
+    $flags = ord(shiftn($s,1));
+    error_log('flags = ' . ($flags));
+    $up = ($flags & 0x01); // user presence
+    $uv = ($flags & 0x04); // user verification
+    $at = ($flags & 0x40); // attestation
+    $ed = ($flags & 0x80); // extensions
+    assert( $up ); // user presence: UP == 1
+    error_log("ED=$ed AT=$at UV=$uv UP=$up");
+    assert( !$ed ); // no extensions
+    
+    $signCount = shiftn($s,4);
+    error_log('signCount = ' . bin2hex($signCount));
+    $signCount = unpack("N",$signCount)[1]; // unsigned long (always 32 bit, big endian byte order)
+
+    error_log('signCount = ' . ($signCount));
+    assert(strlen($s) > 0); // for registration, attestedCredentialData must be present
+    $attestedCredentialData = $s; // assuming no extensions
+    error_log('attestedCredentialData = ' . bin2hex($attestedCredentialData));
+
+    // The attestedCredentialData field contains the credentialId and credentialPublicKey.
+    $aaguid = shiftn($s,16);
+    error_log('aaguid = ' . bin2hex($aaguid)); // all 0s for attestation "none"
+    $credentialIdLength = shiftn($s,2);
+    error_log('credentialIdLength = ' . bin2hex($credentialIdLength));
+    $length = unpack("n",$credentialIdLength)[1]; // unsigned short (always 16 bit, big endian byte order)
+    error_log("length = $length");
+    $credentialId = shiftn($s,$length);
+    error_log("credentialId = " . bin2hex($credentialId));
+    $credentialPublicKey = $s;
+    error_log('credentialPublicKey = ' . bin2hex($credentialPublicKey));
+    $credentialPublicKey = \CBOR\CBOREncoder::decode($credentialPublicKey);
+    
+    assert($credentialPublicKey[KTY] == EC2);
+    assert($credentialPublicKey[ALG] == ES256);
+    assert($credentialPublicKey[CRV] == P256);
+    $x = bin2hex($credentialPublicKey[X]->get_byte_string());
+    $y = bin2hex($credentialPublicKey[Y]->get_byte_string());
+    error_log("x=$x; y=$y");
+    
+    if( $attestationObject['fmt'] === "packed") { // process packed attestation
+        if( array_key_exists('x5c', $attStmt)) { // Attestation types Basic, AttCA - supported
+            // attStmt contains alg, sig, x5c (for full attestation)
+            $alg = $attStmt['alg'];
+            error_log("algorithm is: $alg");
+            $sig = $attStmt['sig']->get_byte_string();
+            error_log("sig: " . bin2hex($sig));
+            $x5c = $attStmt['x5c'];
+            error_log("#certs: " . count($x5c));
+            assert(count($x5c) >= 1);
+            // packed attestation carries a complete certificate chain, first cert is Attestation Certificate, rest is CA chain
+            $attestnCert = array_shift($x5c);
+            $der = $attestnCert->get_byte_string();
+            error_log("cert: " . bin2hex($der));
+            $pem = "-----BEGIN CERTIFICATE-----\n" . chunk_split(base64_encode($der)) . "-----END CERTIFICATE-----\n";
+            // error_log( $pem );
+            $certificate = openssl_x509_parse($pem);
+            while($msg = openssl_error_string() !== false) error_log("openssl error: $msg"); # flush openssl errors
+            // error_log( print_r( $certificate, true ));
+            assert($certificate['version'] === 2);	// 0x02 == version 3
+            assert($certificate['subject']['OU'] === 'Authenticator Attestation');
+            assert($certificate['extensions']['basicConstraints'] === 'CA:FALSE');
+            if( array_key_exists('1.3.6.1.4.1.45724.1.1.4', $certificate['extensions']) ) {
+                $fido_gen_ce_aaguid = $certificate['extensions']['1.3.6.1.4.1.45724.1.1.4'];
+                error_log("id-fido-gen-ce-aaguid: " . bin2hex($fido_gen_ce_aaguid));
+            }
+            $publicKey = openssl_pkey_get_public($pem);
+            while($msg = openssl_error_string() !== false) error_log("openssl error: $msg"); # flush openssl errors
+            assert($publicKey!==FALSE);
+            error_log("openssl_pkey_get_details:" . print_r(openssl_pkey_get_details($publicKey), TRUE));
+
+            // dump CA chain
+            foreach($x5c as $c) {
+                $der = $c->get_byte_string();
+                error_log("cert: " . bin2hex($der));
+                $pem = "-----BEGIN CERTIFICATE-----\n" . chunk_split(base64_encode($der)) . "-----END CERTIFICATE-----\n";
+                error_log( $pem );
+            }
+            // verify attestation signature against public key in certificate
+            $clientDataHash = hash( 'sha256', $clientDataJSON, true );
+            $signedData = $authData . $clientDataHash;
+            error_log("signedData=".bin2hex($signedData));
+            error_log("signature=".bin2hex($sig));
+            // Verify that sig is a valid signature over the concatenation of authenticatorData and clientDataHash using the attestation public key in attestnCert with the algorithm specified in alg.
+            $result = openssl_verify($signedData, $sig, $publicKey, OPENSSL_ALGO_SHA256); // alg -7 == ES256
+            while($msg = openssl_error_string() !== false) error_log("openssl error: $msg"); # flush openssl errors
+            error_log(print_r("verify:".$result,TRUE));
+            assert($result===1);
+        } else { // attestation type ECDAA or Self - unsupported
+            error_log("Unsupported attestation type (Self of ECDAA)");
+        }
+    } elseif( $attestationObject['fmt'] === "fido-u2f") { // in case of legacy tokens
+        $sig = $attStmt['sig']->get_byte_string();
+        error_log("sig: " . bin2hex($sig));
+        $x5c = $attStmt['x5c'];
+        assert(count($x5c) == 1); // fido-u2f attestation carries a single certificate (no CA chain)
+        $attestnCert = array_shift($x5c);
+        $der = $attestnCert->get_byte_string();
+        error_log("cert: " . bin2hex($der));
+        $pem = "-----BEGIN CERTIFICATE-----\n" . chunk_split(base64_encode($der)) . "-----END CERTIFICATE-----\n";
+        $publicKey = openssl_pkey_get_public($pem);
+        while($msg = openssl_error_string() !== false) error_log("openssl error: $msg"); # flush openssl errors
+        assert($publicKey!==FALSE);
+        error_log("openssl_pkey_get_details:" . print_r(openssl_pkey_get_details($publicKey), TRUE));
+        assert(openssl_pkey_get_details($publicKey)['ec']['curve_name'] === 'prime256v1');
+        $publicKeyU2F = hex2bin('04'.$x.$y);
+        $clientDataHash = hash( 'sha256', $clientDataJSON, true );
+        $verificationData = chr(0) . $rpIdHash . $clientDataHash . $credentialId . $publicKeyU2F; 
+        error_log("verificationData=".bin2hex($verificationData));
+        error_log("signature=".bin2hex($sig));
+        $result = openssl_verify($verificationData, $sig, $publicKey, OPENSSL_ALGO_SHA256); // alg -7 == ES256
+        while($msg = openssl_error_string() !== false) error_log("openssl error: $msg"); # flush openssl errors
+        error_log(print_r("verify:".$result,TRUE));
+        assert($result===1);
+    } elseif( $attestationObject['fmt'] === "none") { // in case user declined attestation
+        // no attestation
+        echo "please allow attestation";
+        exit();
+    }
+
+    // todo: store the credentialPublicKey with the credentialId in the account for this user (instead of EC params x,y)
+    $entry = [
+        'user' => [
+            'id' => bin2hex($user_id),
+            'name' => $user_name,
+            'displayName' => $displayName,
+        ],
+        'credential' => [
+            'id' => bin2hex($credentialId),
+            'x' => $x,
+            'y' => $y,
+            'signCount' => $signCount,
+        ]
+    ];
+    error_log(print_r($entry,TRUE));
+    file_put_contents("/tmp/entry.json", json_encode($entry));
+
+    echo "<a href='login.php'>login</a> | <a href='register.php'>register</a>";
+    exit();
+}
+?>
+<!-- client side part -->
+<?php
+$challenge = random_bytes(32); // must be a cryptographically random number sent from a server
+error_log("new challenge: " . bin2hex($challenge));
+$_SESSION['challenge'] = $challenge;
+?>
+<script>
+if( navigator.credentials==undefined ) console.error("credentials API unavailable");
+if (!window.PublicKeyCredential) console.error("Web Authentication API unavailable");
+
+PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable().then(console.log).catch(console.error);
+
+function bufferToHex (buffer) {
+    return Array
+        .from (new Uint8Array (buffer))
+        .map (b => b.toString (16).padStart (2, "0"))
+        .join ("");
+}
+
+// https://www.iana.org/assignments/cose/cose.xhtml#algorithms
+const ES256 = -7;  // ECDSA      w/ SHA-256
+const PS256 = -37; // RSASSA-PSS w/ SHA-256	(as used in Windows Hello)
+
+// https://developer.mozilla.org/en-US/docs/Web/API/Web_Authentication_API#Examples
+// sample arguments for registration
+var createCredentialDefaultArgs = {
+    publicKey: {
+        // Relying Party (a.k.a. - Service):
+        rp: {	// required
+            name: "SURFsecureID",
+	    // optional: id, not used - default is fine (i.e. current domain)
+	    // optional: icon, not used
+        },
+
+        // User:
+        user: {	// required
+            id: new Uint8Array([ <?= bin2intList($user_id) ?> ]).buffer, // unique, opaque, not intended for display, match with userHandle in Assertion
+            name: "<?= $user_name ?>",	      // intended for display, SURFconext ePPN
+            displayName:  "<?= $displayName ?>" // intended for display, SURFconext displayName
+	    // optional: icon, not used
+        },
+
+        pubKeyCredParams: [
+            {	// required
+                type: "public-key",
+                alg: ES256
+            }
+        ],
+
+    	// this is needed for SURFsecureID as we want to whitelist authenticators by vendor/certification etc (default is none)
+        attestation: "direct", // optional
+
+	    // this is required for SURFsecureID to obtain a uniform experience across browsers. 60 seconds seem like a reasonable value, but this should be configurable
+        timeout: 60000, // optional
+
+    	// required:
+        challenge: new Uint8Array([ <?= bin2intList($challenge) ?> ]).buffer
+
+	    // not used:
+    	// excludeCredentials, not needed as long as we do not allow more than one registered authenticator
+	    // authenticatorSelection, defaults are fine, i.e. authenticatorAttachmentOptional can be either platform or cross-platform, requireResidentKeyOptional=false, userVerificationOptional=preferred
+	    // extensions, eg AppId, not needed as we have no legacy U2F tokens registered in production
+    }
+};
+
+// register / create a new credential
+console.log(createCredentialDefaultArgs);
+navigator.credentials.create(createCredentialDefaultArgs)
+    .then((cred) => {
+        console.log(cred); // PublicKeyCredential
+        // id and type inherited from Credential interface
+        console.log("id: " + cred.id); // base64urlencoded
+        console.log("type: " + cred.type); // "public-key"
+        //
+        console.log("rawId: " + bufferToHex(cred.rawId)); // ArrayBuffer
+        console.log("response: " + cred.response);	// AuthenticatorAttestationResponse
+        if(!window.safari) // not implemented on Safari
+            console.log(cred.getClientExtensionResults()); // Object {} - not using any extensions
+        // clientDataJSON inherited from AuthenticatorResponse
+        console.log("clientDataJSON: " + bufferToHex(cred.response.clientDataJSON)); // ArrayBuffer
+        console.log("attestationObject: " + bufferToHex(cred.response.attestationObject)); // ArrayBuffer
+        // cred.id, clientDataJSON, and attestationObject are sent back to server
+        document.getElementById("registerForm").elements.namedItem("credId").value = cred.id;
+        document.getElementById("registerForm").elements.namedItem("clientDataJSON").value = bufferToHex(cred.response.clientDataJSON);
+        document.getElementById("registerForm").elements.namedItem("attestationObject").value = bufferToHex(cred.response.attestationObject);
+    }).catch((err) => {console.error("oops:" + err)});
+</script>
+
+<div id="container">
+    <h1>Register</h1>
+
+    <div id="result" class="status" hidden></div>
+    <button id="register" hidden>Register</button>
+
+    <form id="registerForm" method="post">
+    <input type="hidden" name="clientDataJSON" value="" />
+    <input type="hidden" name="attestationObject" value="" />
+    <input type="hidden" id="credId" name="credId" value="" />
+    <input type="submit" value="submit" />
+</form>
+
+</div>
