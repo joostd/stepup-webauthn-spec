@@ -1,0 +1,6 @@
+{
+    "require": {
+        "2tvenom/cborencode": "^1.0",
+        "spomky-labs/base64url": "^2.0"
+    }
+}
