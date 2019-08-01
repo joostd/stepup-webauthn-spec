@@ -1,0 +1,9 @@
+{
+    "c01675576adf197eaf0b60128c9b26f94a8e2ac2653f4ccb1721657211bc8c25": {
+        "aaguid": "77010bd7212a4fc9b236d2ca5e9d4084",
+        "description": "Feitian BioPass FIDO2 Authenticator"
+    },
+    "27fb4c5220727197ec41fb54fc534db51efe4029e70a59ab6ee8252e3377adb9": {
+        "description": "Yubico U2F EE Serial 140712305827976"
+    }
+}

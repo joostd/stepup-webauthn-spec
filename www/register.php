@@ -7,6 +7,10 @@ use CBOR\CBOREncoder;
 
 session_start();
 
+// attestation truststore
+$truststore = json_decode( file_get_contents("../truststore.json"), TRUE);
+error_log(print_r($truststore,TRUE));
+
 // Considering a single account here...
 $user_name   = "jd@example.edu"; // intended for display, SURFconext ePPN
 $displayName = "John Doe";  // intended for display, SURFconext displayName
@@ -20,6 +24,7 @@ error_log("user id: " . bin2hex($user_id));
 
 if( $_POST['credId'] ) { // new registration with credId, clientDataJSON, and attestationObject
     error_log(print_r($_POST,true));
+    error_log(print_r($_SERVER,true));
 
     // clientDataJSON, containing type, challenge, and origin
     // The client data represents the contextual bindings of both the WebAuthn Relying Party and the client.
@@ -36,7 +41,7 @@ if( $_POST['credId'] ) { // new registration with credId, clientDataJSON, and at
     $attestationObject = CBOREncoder::decode(hex2bin($_POST['attestationObject']),true);
     error_log("attestationObject has properties: " . implode(",",array_keys($attestationObject)));
     error_log("fmt=".$attestationObject['fmt']);
-    assert( in_array($attestationObject['fmt'], ["none", "packed", "fido-u2f"]) );	// only consider packed and fido-u2f for now, ignoring tpm, android-key, android-safetynet, none
+    // assert( in_array($attestationObject['fmt'], ["none", "packed", "fido-u2f", "android-safetynet", "android-key"]) );	// only consider packed and fido-u2f for now, ignoring tpm, android-key, android-safetynet, none
 
     // Attestation Statement
     $attStmt = (array) $attestationObject['attStmt'];
@@ -73,7 +78,8 @@ if( $_POST['credId'] ) { // new registration with credId, clientDataJSON, and at
     error_log('attestedCredentialData = ' . bin2hex($attestedCredentialData));
 
     // The attestedCredentialData field contains the credentialId and credentialPublicKey.
-    $aaguid = shiftn($s,16);
+    $aaguid = shiftn($s,16); // Authenticator Attestation Globally Unique ID (AAGUID) 
+    // TODO: use aaguid to look up a metadata statementin the FIDO Metadata Service
     error_log('aaguid = ' . bin2hex($aaguid)); // all 0s for attestation "none"
     $credentialIdLength = shiftn($s,2);
     error_log('credentialIdLength = ' . bin2hex($credentialIdLength));
@@ -106,8 +112,14 @@ if( $_POST['credId'] ) { // new registration with credId, clientDataJSON, and at
             $attestnCert = array_shift($x5c);
             $der = $attestnCert->get_byte_string();
             error_log("cert: " . bin2hex($der));
-            $pem = "-----BEGIN CERTIFICATE-----\n" . chunk_split(base64_encode($der)) . "-----END CERTIFICATE-----\n";
-            // error_log( $pem );
+            // Validate attestation certificate against Trust Store
+            $attestnCertHash = hash( 'sha256', $der );
+            error_log("attestnCertHash: " . $attestnCertHash);
+            assert( array_key_exists($attestnCertHash, $truststore) ); // the attestation certificate MUST be whitelisted
+            error_log( "Accepting AAGUID ".bin2hex($aaguid)." [".$truststore[$attestnCertHash]['description']."]" );
+            assert( $truststore[$attestnCertHash]['aaguid'] == bin2hex($aaguid) ); // double check on trust store contents
+            $pem = "-----BEGIN CERTIFICATE-----\n" . chunk_split(base64_encode($der),64) . "-----END CERTIFICATE-----\n";
+            error_log( $pem );
             $certificate = openssl_x509_parse($pem);
             while($msg = openssl_error_string() !== false) error_log("openssl error: $msg"); # flush openssl errors
             // error_log( print_r( $certificate, true ));
@@ -117,6 +129,7 @@ if( $_POST['credId'] ) { // new registration with credId, clientDataJSON, and at
             if( array_key_exists('1.3.6.1.4.1.45724.1.1.4', $certificate['extensions']) ) {
                 $fido_gen_ce_aaguid = $certificate['extensions']['1.3.6.1.4.1.45724.1.1.4'];
                 error_log("id-fido-gen-ce-aaguid: " . bin2hex($fido_gen_ce_aaguid));
+                assert( bin2hex($fido_gen_ce_aaguid) == "0410" . bin2hex($aaguid) ); // AAUID in certificate MUST match AAGUID in authenticator data (with ASN.1 OCTET STRING prefix)
             }
             $publicKey = openssl_pkey_get_public($pem);
             while($msg = openssl_error_string() !== false) error_log("openssl error: $msg"); # flush openssl errors
@@ -127,7 +140,7 @@ if( $_POST['credId'] ) { // new registration with credId, clientDataJSON, and at
             foreach($x5c as $c) {
                 $der = $c->get_byte_string();
                 error_log("cert: " . bin2hex($der));
-                $pem = "-----BEGIN CERTIFICATE-----\n" . chunk_split(base64_encode($der)) . "-----END CERTIFICATE-----\n";
+                $pem = "-----BEGIN CERTIFICATE-----\n" . chunk_split(base64_encode($der), 64) . "-----END CERTIFICATE-----\n";
                 error_log( $pem );
             }
             // verify attestation signature against public key in certificate
@@ -151,12 +164,27 @@ if( $_POST['credId'] ) { // new registration with credId, clientDataJSON, and at
         $attestnCert = array_shift($x5c);
         $der = $attestnCert->get_byte_string();
         error_log("cert: " . bin2hex($der));
+        // Validate U2F attestation certificate against Trust Store
+        $attestnCertHash = hash( 'sha256', $der );
+        error_log("attestnCertHash: " . $attestnCertHash);
+        assert( array_key_exists($attestnCertHash, $truststore) ); // the attestation certificate MUST be whitelisted
+        // error_log( "Accepting AAGUID ".bin2hex($aaguid)." [".$truststore[$attestnCertHash]['description']."]" );
+        // assert( $truststore[$attestnCertHash]['aaguid'] == bin2hex($aaguid) ); // double check on trust store contents
         $pem = "-----BEGIN CERTIFICATE-----\n" . chunk_split(base64_encode($der)) . "-----END CERTIFICATE-----\n";
+        if( !isset( $truststore[$attestnCertHash])) { // unknown token, dump certificate details for inspection
+            error_log( $pem );
+            $certificate = openssl_x509_parse($pem);
+            while($msg = openssl_error_string() !== false) error_log("openssl error: $msg"); # flush openssl errors
+            error_log( print_r( $certificate, true ));
+        }
         $publicKey = openssl_pkey_get_public($pem);
         while($msg = openssl_error_string() !== false) error_log("openssl error: $msg"); # flush openssl errors
         assert($publicKey!==FALSE);
-        error_log("openssl_pkey_get_details:" . print_r(openssl_pkey_get_details($publicKey), TRUE));
-        assert(openssl_pkey_get_details($publicKey)['ec']['curve_name'] === 'prime256v1');
+        $publicKeyArray = openssl_pkey_get_details($publicKey);
+        assert($publicKeyArray['ec']['curve_name'] === 'prime256v1');
+        if( $publicKeyArray['ec']['curve_name'] !== 'prime256v1') { // in case of unimplemented EC algo, dump pubkey for inspection
+            error_log("openssl_pkey_get_details:" . print_r(openssl_pkey_get_details($publicKey), TRUE));
+        }
         $publicKeyU2F = hex2bin('04'.$x.$y);
         $clientDataHash = hash( 'sha256', $clientDataJSON, true );
         $verificationData = chr(0) . $rpIdHash . $clientDataHash . $credentialId . $publicKeyU2F; 
@@ -166,9 +194,38 @@ if( $_POST['credId'] ) { // new registration with credId, clientDataJSON, and at
         while($msg = openssl_error_string() !== false) error_log("openssl error: $msg"); # flush openssl errors
         error_log(print_r("verify:".$result,TRUE));
         assert($result===1);
+    } elseif( $attestationObject['fmt'] === "android-safetynet") { // typically when using Chrome on Android
+        // although unsupported, log details to ease future implementation
+        // https://medium.com/@herrjemand/verifying-fido2-safetynet-attestation-bd261ce1978d
+        // https://www.w3.org/TR/webauthn/#android-safetynet-attestation
+        $version = $attStmt['ver'];
+        error_log("version: $version");
+        $response = $attStmt['response']->get_byte_string();
+        #error_log("response: $response");
+        list($header, $payload, $signature) = explode('.',$response);
+        $header = json_decode(base64_decode(strtr($header, "-_", "+/")), TRUE);
+        $payload = json_decode(base64_decode(strtr($payload, "-_", "+/")), TRUE);
+        error_log("JWT header: " . print_r($header, TRUE));
+        // TODO verify JWT signature
+        error_log("JWT payload: " . print_r($payload, TRUE));
+        error_log("ctsProfileMatch: " . $payload['ctsProfileMatch']);
+        error_log("basicIntegrity: " . $payload['basicIntegrity']);
+        error_log("advice: " . $payload['advice']); // e.g. LOCK_BOOTLOADER, RESTORE_TO_FACTORY_ROM
+        // TODO: Verify the SafetyNet attestation response
+        // https://developer.android.com/training/safetynet/attestation#verify-attestation-response
+        // 
+        echo "Attestation Format '" . $attestationObject['fmt'] . "' not supported";
+        exit();
+    } elseif( $attestationObject['fmt'] === "android-key") { // in case user declined attestation
+        // certificate contains an extension with OID 1.3.6.1.4.1.11129.2.1.17
+        // https://android.googlesource.com/platform/hardware/libhardware/+/master/include/hardware/keymaster2.h
+        echo "Attestation Format '" . $attestationObject['fmt'] . "' not supported";
+        exit();
     } elseif( $attestationObject['fmt'] === "none") { // in case user declined attestation
-        // no attestation
         echo "please allow attestation";
+        exit();
+    } else {
+        echo "Unknown Attestation Format";
         exit();
     }
 
@@ -184,6 +241,7 @@ if( $_POST['credId'] ) { // new registration with credId, clientDataJSON, and at
             'x' => $x,
             'y' => $y,
             'signCount' => $signCount,
+            'attestationObject' => $_POST['attestationObject'], // store verbatim attestation object to allow for future re-evaluation of trust
         ]
     ];
     error_log(print_r($entry,TRUE));
