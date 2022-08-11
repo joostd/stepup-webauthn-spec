@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>MakeCredential Example</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta charset="utf-8">
+</head>
+<body>
+
+            <div class="column col-4 text-center">
+                <div class="card">
+                    <div class="card-body">
+                        <button class="btn btn-primary" onclick="makeCredsSample()">Make Credentials</button>
+                        <button class="btn btn-primary" onclick="dofetch()">Fetch</button>
+                    </div><!-- .card-body -->
+                </div><!-- .card -->
+            </div>
+
+    <script>
+
+        var makeCredsSample = () => {
+            var challenge = new Uint8Array(32);
+            window.crypto.getRandomValues(challenge);
+
+            var userID = 'Kosv9fPtkDoh4Oz7Yq/pVgWHS8HhdlCto5cR0aBoVMw='
+            var id = Uint8Array.from(window.atob(userID), c=>c.charCodeAt(0))
+
+	var publicKey = {
+		challenge: challenge,
+		rp: {
+		    name: "proxy.aai.surfnet.nl"
+		},
+		user: {
+		    id: id,
+		    name: "Joost",
+		    displayName:  "Joost"
+		},
+		pubKeyCredParams: [
+		    { type: "public-key", alg: -7 }
+		]
+	}
+
+            navigator.credentials.create({ 'publicKey': publicKey }).then(console.log).catch(console.log) }
+
+generateOptionsFromServerResponse = (response) => {
+return makeCredsSample();
+}
+
+
+dofetch = () => {
+  var optionsRequest = {
+    // set some parameters
+  };
+  fetch('https://proxy.aai.surfnet.nl/options.php', {
+      method: "POST",
+      body: JSON.stringify(optionsRequest)
+    })
+  .then(function(response) {
+    var options = generateOptionsFromServerResponse(response);
+    return navigator.credentials.create(options); // WebAuthn is not directly called by user activated event 
+  });
+}
+
+
+
+
+    </script>
+</body>
+</html>

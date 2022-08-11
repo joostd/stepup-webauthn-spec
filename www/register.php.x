@@ -6,11 +6,10 @@ use Base64Url\Base64Url;
 use CBOR\CBOREncoder;
 
 session_start();
-error_log("============================== REGISTER ==============================");
 
 // attestation truststore -- this should be stored in the database
 $truststore = json_decode( file_get_contents("../truststore.json"), TRUE);
-// error_log(print_r($truststore,TRUE));
+error_log(print_r($truststore,TRUE));
 
 // Considering a single account here...
 $user_name   = "jd@example.edu"; // intended for display, SURFconext ePPN
@@ -23,9 +22,9 @@ if( !isset($_SESSION['user_id'])) {
 $user_id = $_SESSION['user_id'];
 error_log("user id: " . bin2hex($user_id));
 
-if( isset($_POST['credId']) ) { // new registration with credId, clientDataJSON, and attestationObject
+if( $_POST['credId'] ) { // new registration with credId, clientDataJSON, and attestationObject
     error_log(print_r($_POST,true));
-    // error_log(print_r($_SERVER,true));
+    error_log(print_r($_SERVER,true));
 
     // clientDataJSON, containing type, challenge, and origin
     // The client data represents the contextual bindings of both the WebAuthn Relying Party and the client.
@@ -39,8 +38,7 @@ if( isset($_POST['credId']) ) { // new registration with credId, clientDataJSON,
     // unset($_SESSION['challenge']);
 
     // attestationObject, containing fmt, attStmt, authData
-    $encodedAttestationObject = hex2bin($_POST['attestationObject']);
-    $attestationObject = CBOREncoder::decode($encodedAttestationObject,true);
+    $attestationObject = CBOREncoder::decode(hex2bin($_POST['attestationObject']),true);
     error_log("attestationObject has properties: " . implode(",",array_keys($attestationObject)));
     error_log("fmt=".$attestationObject['fmt']);
     // assert( in_array($attestationObject['fmt'], ["none", "packed", "fido-u2f", "android-safetynet", "android-key"]) );	// only consider packed and fido-u2f for now, ignoring tpm, android-key, android-safetynet, none
@@ -117,36 +115,11 @@ if( isset($_POST['credId']) ) { // new registration with credId, clientDataJSON,
             // Validate attestation certificate against Trust Store
             $attestnCertHash = hash( 'sha256', $der );
             error_log("attestnCertHash: " . $attestnCertHash);
-            // TODO: use attestationCertificateKeyIdentifiers instead of hashes to match metadata service spec?
-            // assert( array_key_exists($attestnCertHash, $truststore) ); // the attestation certificate MUST be whitelisted
-
-            $pem = "-----BEGIN CERTIFICATE-----\n" . chunk_split(base64_encode($der),64) . "-----END CERTIFICATE-----\n";
-            error_log( $pem );
-
-            // Attestation validation:
-            // The attestation certificate is accepted if either
-            // (1) the certificate validates to a registered CA using FIDO2 metadata
-            // (2) the certificate validates to a whitelisted CA
-            // (3) the certificate matches a whitelisted certificate
-            $certificate = openssl_x509_read($pem);
-            $openssl_cadir = '../u2f-cas';
-            // TODO: validate attestation certificate against FIDO2 Metadata directory
-            $valid = openssl_x509_checkpurpose($certificate,0,array($openssl_cadir));
-            error_log("openssl_x509_checkpurpose: $valid");
-            if($valid !== TRUE) {
-                // probably self signed or unknown CA. Check whitelist
-                error_log("U2F attestation certificate does not validate against a known CA");
-                if( !isset( $truststore[$attestnCertHash])) { // unknown token, dump certificate details for inspection
-                    error_log( "Attestation Certificate:" . PHP_EOL . $pem );
-                    $certificate = openssl_x509_parse($pem);
-                    error_log( print_r( $certificate, true ));
-                    echo "Attestation Certificate not accepted";
-                    exit();    
-                }
-            }
-            
+            assert( array_key_exists($attestnCertHash, $truststore) ); // the attestation certificate MUST be whitelisted
             error_log( "Accepting AAGUID ".bin2hex($aaguid)." [".$truststore[$attestnCertHash]['description']."]" );
             assert( $truststore[$attestnCertHash]['aaguid'] == bin2hex($aaguid) ); // double check on trust store contents
+            $pem = "-----BEGIN CERTIFICATE-----\n" . chunk_split(base64_encode($der),64) . "-----END CERTIFICATE-----\n";
+            error_log( $pem );
             $certificate = openssl_x509_parse($pem);
             while($msg = openssl_error_string() !== false) error_log("openssl error: $msg"); # flush openssl errors
             // error_log( print_r( $certificate, true ));
@@ -196,24 +169,13 @@ if( isset($_POST['credId']) ) { // new registration with credId, clientDataJSON,
         // Validate U2F attestation certificate against Trust Store
         $attestnCertHash = hash( 'sha256', $der );
         error_log("attestnCertHash: " . $attestnCertHash);
+        assert( array_key_exists($attestnCertHash, $truststore) ); // the attestation certificate MUST be whitelisted
         $pem = "-----BEGIN CERTIFICATE-----\n" . chunk_split(base64_encode($der)) . "-----END CERTIFICATE-----\n";
-        $certificate = openssl_x509_read($pem);
-        $openssl_cadir = '../u2f-cas';
-        // validate attestation certificate against U2F CA directory
-        // This should validate Yubico U2F security keys using https://developers.yubico.com/U2F/yubico-u2f-ca-certs.txt
-        $valid = openssl_x509_checkpurpose($certificate,0,array($openssl_cadir));
-        error_log("openssl_x509_checkpurpose: $valid");
-        if($valid !== TRUE) {
-            // probably self signed or unknown CA. Check whitelist
-            error_log("U2F attestation certificate does not validate against a known CA");
-            if( !isset( $truststore[$attestnCertHash])) { // unknown token, dump certificate details for inspection
-                error_log( "Attestation Certificate:" . PHP_EOL . $pem );
-                $certificate = openssl_x509_parse($pem);
-                error_log( print_r( $certificate, true ));
-                echo "Attestation Certificate not accepted";
-                exit();    
-            }
+        if( !isset( $truststore[$attestnCertHash])) { // unknown token, dump certificate details for inspection
+            error_log( "Attestation Certificate:" . PHP_EOL . $pem );
         }
+            $certificate = openssl_x509_parse($pem);
+            error_log( print_r( $certificate, true ));
         $publicKey = openssl_pkey_get_public($pem);
         while($msg = openssl_error_string() !== false) error_log("openssl error: $msg"); # flush openssl errors
         assert($publicKey!==FALSE);
@@ -250,7 +212,7 @@ if( isset($_POST['credId']) ) { // new registration with credId, clientDataJSON,
         error_log("advice: " . $payload['advice']); // e.g. LOCK_BOOTLOADER, RESTORE_TO_FACTORY_ROM
 	// LOCK_BOOTLOADER: check if OEM unlocking is enabled in developer options 
 
-    // TODO: Verify the SafetyNet attestation response
+        // TODO: Verify the SafetyNet attestation response
         // https://developer.android.com/training/safetynet/attestation#verify-attestation-response
         // 
         echo "Attestation Format '" . $attestationObject['fmt'] . "' not supported";
@@ -316,7 +278,6 @@ const PS256 = -37; // RSASSA-PSS w/ SHA-256	(as used in Windows Hello)
 // https://developer.mozilla.org/en-US/docs/Web/API/Web_Authentication_API#Examples
 // sample arguments for registration
 var createCredentialDefaultArgs = {
-
     publicKey: {
         // Relying Party (a.k.a. - Service):
         rp: {	// required
@@ -337,7 +298,7 @@ var createCredentialDefaultArgs = {
             {	// required
                 type: "public-key",
                 alg: ES256
-            },
+            }
         ],
 
     	// this is needed for SURFsecureID as we want to whitelist authenticators by vendor/certification etc (default is none)
@@ -358,10 +319,7 @@ var createCredentialDefaultArgs = {
 
 // register / create a new credential
 console.log(createCredentialDefaultArgs);
-
-var makeCreds = () => {
-
-    navigator.credentials.create(createCredentialDefaultArgs)
+navigator.credentials.create(createCredentialDefaultArgs)
     .then((cred) => {
         console.log(cred); // PublicKeyCredential
         // id and type inherited from Credential interface
@@ -380,8 +338,6 @@ var makeCreds = () => {
         document.getElementById("registerForm").elements.namedItem("clientDataJSON").value = bufferToHex(cred.response.clientDataJSON);
         document.getElementById("registerForm").elements.namedItem("attestationObject").value = bufferToHex(cred.response.attestationObject);
     }).catch((err) => {console.error("oops:" + err)});
-}
-
 </script>
 
 <div id="container">
@@ -389,7 +345,6 @@ var makeCreds = () => {
 
     <div id="result" class="status" hidden></div>
     <button id="register" hidden>Register</button>
-    <button class="btn btn-primary" onclick="makeCreds()">Create Credentials</button>
 
     <form id="registerForm" method="post">
     <input type="hidden" name="clientDataJSON" value="" />

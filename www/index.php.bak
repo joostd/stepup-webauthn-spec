@@ -1,0 +1,87 @@
+<?php
+$challenge = array_map('ord',str_split(random_bytes(32))); // must be a cryptographically random number sent from a server
+?>
+<script>
+PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable().then(console.log).catch(console.error);
+
+// https://developer.mozilla.org/en-US/docs/Web/API/Web_Authentication_API#Examples
+// sample arguments for registration
+var createCredentialDefaultArgs = {
+    publicKey: {
+        // Relying Party (a.k.a. - Service):
+        rp: {	// required
+            name: "SURFsecureID",
+	    // optional: id, not used - default is fine (i.e. current domain)
+	    // optional: icon, not used
+        },
+
+        // User:
+        user: {	// required
+            id: new Uint8Array(16),		// unique, opaque, not intended for display, match with userHandle in Assertion
+            name: "jodi@surfnet.nl",		// intended for display, SURFconext ePPN
+            displayName: "Joost van Dijk"	// intended for display, SURFconext displayName
+	    // optional: icon, not used
+        },
+
+	// -7 indicates the elliptic curve algorithm ECDSA with SHA-256
+	// -37 indicates RSASSA-PSS w/ SHA-256 (as used in Windows Hello)
+	// See https://www.iana.org/assignments/cose/cose.xhtml#algorithms
+        pubKeyCredParams: [{	// required
+            type: "public-key",
+            alg: -7
+        }
+        ],
+
+	// this is needed for SURFsecureID as we want to whitelist authenticators by vendor/certification etc (default is none)
+        attestation: "direct", // optional
+
+	// this is required for SURFsecureID to obtain a uniform experience across browsers. 60 seconds seem like a reasonable value, but this should be configurable
+        timeout: 60000, // optional
+
+	// required:
+        challenge: new Uint8Array([ <?= implode(",",$challenge);?> ]).buffer
+
+	// not used:
+	// excludeCredentials, not needed as long as we do not allow more than one registered authenticator
+	// authenticatorSelection, defaults are fine, i.e. authenticatorAttachmentOptional can be either platform or cross-platform, requireResidentKeyOptional=false, userVerificationOptional=preferred
+	// extensions, eg AppId, not needed as we have no legacy U2F tokens registered
+    }
+};
+
+<?php
+$challenge = array_map('ord',str_split(random_bytes(32))); // must be a cryptographically random number sent from a server
+?>
+
+// sample arguments for login
+var getCredentialDefaultArgs = {
+    publicKey: {
+        timeout: 60000,
+        // allowCredentials: [newCredential] // see below
+        challenge: new Uint8Array([ <?= implode(",",$challenge);?> ]).buffer
+    },
+};
+
+// register / create a new credential
+console.log("CREATE CREDENTIAL", createCredentialDefaultArgs);
+navigator.credentials.create(createCredentialDefaultArgs)
+    .then((cred) => {
+        console.log("NEW CREDENTIAL", cred);
+
+        // normally the credential IDs available for an account would come from a server
+        // but we can just copy them from above...
+        var idList = [{
+            id: cred.rawId,
+            transports: ["usb", "nfc", "ble"],
+            type: "public-key"
+        }];
+        getCredentialDefaultArgs.publicKey.allowCredentials = idList;
+	console.log("GET CREDENTIAL", getCredentialDefaultArgs);
+        return navigator.credentials.get(getCredentialDefaultArgs);
+    })
+    .then((assertion) => {
+        console.log("ASSERTION", assertion);
+    })
+    .catch((err) => {
+        console.log("ERROR", err);
+    });
+</script>

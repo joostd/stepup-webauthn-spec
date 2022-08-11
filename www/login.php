@@ -17,7 +17,7 @@ if( array_key_exists('user_id',$_SESSION)) {
     error_log("user id unavailable"); // instruct user to register first (ignored here, as we have a single entry)
 }
 
-if( $_POST['signature'] ) { // new login with signature, clientDataJSON, and authenticatorData
+if( isset($_POST['signature']) ) { // new login with signature, clientDataJSON, and authenticatorData
     error_log(print_r($_POST,true));
     $signature = hex2bin($_POST['signature']);
 
@@ -57,8 +57,8 @@ if( $_POST['signature'] ) { // new login with signature, clientDataJSON, and aut
     $hash = hash( 'sha256', $authenticatorData . $clientDataJSON, true );
     error_log("hash=".bin2hex($hash));
 
-    $hashId = hash('sha256', $_SERVER['HTTP_ORIGIN'], TRUE);
-    $signeddata = $authData . hash('sha256', $clientdata, TRUE);
+    // $hashId = hash('sha256', $_SERVER['HTTP_ORIGIN'], TRUE);
+    // $signeddata = $authData . hash('sha256', $clientData, TRUE);
 
     // 3.	Using credential’s id attribute (or the corresponding rawId, if base64url encoding is inappropriate for your use case), look up the corresponding credential public key.
 
