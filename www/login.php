@@ -129,10 +129,12 @@ var getCredentialDefaultArgs = {
             }
         ],
         // required:
-        challenge: new Uint8Array([ <?= bin2intList($challenge) ?> ]).buffer
+        challenge: new Uint8Array([ <?= bin2intList($challenge) ?> ]).buffer,
+
+        // optional:
+        userVerification: "discouraged" // default is preferred
 
        	// not used:
-        // userVerification 
         // rpId 	    // optional: id, not used - default is fine (i.e. current domain)
        	// extensions, eg AppId, u2f, not needed as we have no legacy U2F tokens registered
     },
