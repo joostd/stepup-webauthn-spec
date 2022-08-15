@@ -7,15 +7,19 @@ use CBOR\CBOREncoder;
 
 session_start();
 
-$entry = json_decode( file_get_contents("/tmp/entry.json"), TRUE);
-error_log(print_r($entry,TRUE));
-
 if( array_key_exists('user_id',$_SESSION)) {
     $user_id = $_SESSION['user_id'];
     error_log("user id: " . bin2hex($user_id));
 } else {
     error_log("user id unavailable"); // instruct user to register first (ignored here, as we have a single entry)
+exit();
 }
+
+$userfile = "/tmp/" . bin2hex($user_id) . ".json";
+error_log("retrieving user info from file $userfile");
+$entry = json_decode( file_get_contents($userfile), TRUE);
+$user_name = $entry['user']['name'];
+$displayName = $entry['user']['displayName'];
 
 if( isset($_POST['signature']) ) { // new login with signature, clientDataJSON, and authenticatorData
     error_log(print_r($_POST,true));
@@ -84,7 +88,7 @@ if( isset($_POST['signature']) ) { // new login with signature, clientDataJSON, 
     $publicKey = openssl_pkey_get_public($pem);
     while($msg = openssl_error_string() !== false) error_log("openssl error: $msg"); # flush openssl errors
     assert($publicKey!==FALSE);
-    error_log("openssl_pkey_get_details:" . print_r(openssl_pkey_get_details($publicKey), TRUE));
+    // error_log("openssl_pkey_get_details:" . print_r(openssl_pkey_get_details($publicKey), TRUE));
     $result = openssl_verify($authenticatorData . $hash, $signature, $publicKey, OPENSSL_ALGO_SHA256);
     while($msg = openssl_error_string() !== false) error_log("openssl error: $msg"); # flush openssl errors
     error_log(print_r("verify:".$result,TRUE));
@@ -92,9 +96,9 @@ if( isset($_POST['signature']) ) { // new login with signature, clientDataJSON, 
 
     // updating account store
     error_log(print_r($entry,TRUE));
-    file_put_contents("/tmp/entry.json", json_encode($entry));
+    file_put_contents($userfile, json_encode($entry));
+    echo "$displayName ($user_name/" . bin2hex($user_id) . ") <a href='login.php'>login</a> | <a href='register.php'>register</a> | <a href='restart.php'>restart</a>";
 
-    echo "<a href='login.php'>login</a> | <a href='register.php'>register</a>";
     exit();
 }
 

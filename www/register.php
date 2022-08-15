@@ -12,17 +12,6 @@ error_log("============================== REGISTER =============================
 $truststore = json_decode( file_get_contents("../truststore.json"), TRUE);
 // error_log(print_r($truststore,TRUE));
 
-// Considering a single account here...
-$user_name   = "jd@example.edu"; // intended for display
-$displayName = "John Doe";  // intended for display
-if( !isset($_SESSION['user_id'])) {
-    error_log("generating new user handle");
-    $user_id = random_bytes(16);  // A user handle is an opaque byte sequence with a maximum size of 64 bytes. 
-    $_SESSION['user_id'] = $user_id;
-}
-$user_id = $_SESSION['user_id'];
-error_log("user id: " . bin2hex($user_id));
-
 if( isset($_POST['credId']) ) { // new registration with credId, clientDataJSON, and attestationObject
     error_log(print_r($_POST,true));
     // error_log(print_r($_SERVER,true));
@@ -261,37 +250,64 @@ if( isset($_POST['credId']) ) { // new registration with credId, clientDataJSON,
         echo "Attestation Format '" . $attestationObject['fmt'] . "' not supported";
         exit();
     } elseif( $attestationObject['fmt'] === "none") { // in case user declined attestation
-        echo "please allow attestation";
-        exit();
+        error_log("No attestation!");
+        // exit();
     } else {
         echo "Unknown Attestation Format";
         exit();
     }
 
+    assert( isset($_SESSION['user_id']));
+    $user_id = $_SESSION['user_id'];
+    $filename = "/tmp/" . bin2hex($user_id) . ".json";
+    $entry = json_decode( file_get_contents($filename), TRUE);
+    $user_name = $entry['user']['name'];
+    $displayName = $entry['user']['displayName'];
+    
     // todo: store the credentialPublicKey with the credentialId in the account for this user (instead of EC params x,y)
-    $entry = [
-        'user' => [
-            'id' => bin2hex($user_id),
-            'name' => $user_name,
-            'displayName' => $displayName,
-        ],
-        'credential' => [
+    $entry['credential'] = [
             'id' => bin2hex($credentialId),
             'x' => $x,
             'y' => $y,
             'signCount' => $signCount,
             'attestationObject' => $_POST['attestationObject'], // store verbatim attestation object to allow for future re-evaluation of trust
-        ]
     ];
     error_log(print_r($entry,TRUE));
-    file_put_contents("/tmp/entry.json", json_encode($entry));
+    file_put_contents($filename, json_encode($entry));
 
-    echo "<a href='login.php'>login</a> | <a href='register.php'>register</a>";
+    echo "$displayName ($user_name/" . bin2hex($user_id) . ") <a href='login.php'>login</a> | <a href='register.php'>register</a> | <a href='restart.php'>restart</a>";
     exit();
 }
 ?>
 <!-- client side part -->
 <?php
+
+if(!isset($_SESSION['user_id'])) {
+    error_log("generating new user handle");
+    $user_id = random_bytes(16);  // A user handle is an opaque byte sequence with a maximum size of 64 bytes. 
+    $_SESSION['user_id'] = $user_id;
+
+    $user_name = base_convert(time(), 10, 36); // use timestamp as userid
+    $displayName = "User " . time()%1000 ;  // intended for display
+
+    $entry = [
+        'user' => [
+            'id' => bin2hex($user_id),
+            'name' => $user_name,
+            'displayName' => $displayName,
+        ]
+    ];
+    $filename = "/tmp/" . bin2hex($user_id) . ".json"; // todo remove duplicate code
+    file_put_contents($filename, json_encode($entry));
+    symlink($filename, "/tmp/$user_name.json");            
+} else {
+    $user_id = $_SESSION['user_id'];
+    $filename = "/tmp/" . bin2hex($user_id) . ".json";
+    $entry = json_decode( file_get_contents($filename), TRUE);
+    $user_name = $entry['user']['name'];
+    $displayName = $entry['user']['displayName'];    
+}
+
 $challenge = random_bytes(32); // must be a cryptographically random number sent from a server
 error_log("new challenge: " . bin2hex($challenge));
 $_SESSION['challenge'] = $challenge;
@@ -341,14 +357,20 @@ var createCredentialDefaultArgs = {
         ],
 
     	// this is needed to whitelist authenticators by vendor/certification etc (default is none)
-        attestation: "direct", // optional
+        // attestation: "direct", // optional
 
 	    // this is required to obtain a uniform experience across browsers. 60 seconds seem like a reasonable value, but this should be configurable
         timeout: 60000, // optional
 
     	// required:
-        challenge: new Uint8Array([ <?= bin2intList($challenge) ?> ]).buffer
+        challenge: new Uint8Array([ <?= bin2intList($challenge) ?> ]).buffer,
 
+        // optional:
+        authenticatorSelection: {
+        //  requireResidentKey: true, // default is false
+          userVerification: "discouraged", // default is preferred
+          authenticatorAttachment: "cross-platform", // either platform or cross-platform
+        },
 	    // not used:
     	// excludeCredentials, not needed as long as we do not allow more than one registered authenticator
 	    // authenticatorSelection, defaults are fine, i.e. authenticatorAttachmentOptional can be either platform or cross-platform, requireResidentKeyOptional=false, userVerificationOptional=preferred
