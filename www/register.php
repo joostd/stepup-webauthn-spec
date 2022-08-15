@@ -13,8 +13,8 @@ $truststore = json_decode( file_get_contents("../truststore.json"), TRUE);
 // error_log(print_r($truststore,TRUE));
 
 // Considering a single account here...
-$user_name   = "jd@example.edu"; // intended for display, SURFconext ePPN
-$displayName = "John Doe";  // intended for display, SURFconext displayName
+$user_name   = "jd@example.edu"; // intended for display
+$displayName = "John Doe";  // intended for display
 if( !isset($_SESSION['user_id'])) {
     error_log("generating new user handle");
     $user_id = random_bytes(16);  // A user handle is an opaque byte sequence with a maximum size of 64 bytes. 
@@ -320,7 +320,7 @@ var createCredentialDefaultArgs = {
     publicKey: {
         // Relying Party (a.k.a. - Service):
         rp: {	// required
-            name: "SURFsecureID",
+            name: "localhost demo",
 	    // optional: id, not used - default is fine (i.e. current domain)
 	    // optional: icon, not used
         },
@@ -328,8 +328,8 @@ var createCredentialDefaultArgs = {
         // User:
         user: {	// required
             id: new Uint8Array([ <?= bin2intList($user_id) ?> ]).buffer, // unique, opaque, not intended for display, match with userHandle in Assertion
-            name: "<?= $user_name ?>",	      // intended for display, SURFconext ePPN
-            displayName:  "<?= $displayName ?>" // intended for display, SURFconext displayName
+            name: "<?= $user_name ?>",	      // intended for display
+            displayName:  "<?= $displayName ?>" // intended for display
 	    // optional: icon, not used
         },
 
@@ -340,10 +340,10 @@ var createCredentialDefaultArgs = {
             },
         ],
 
-    	// this is needed for SURFsecureID as we want to whitelist authenticators by vendor/certification etc (default is none)
+    	// this is needed to whitelist authenticators by vendor/certification etc (default is none)
         attestation: "direct", // optional
 
-	    // this is required for SURFsecureID to obtain a uniform experience across browsers. 60 seconds seem like a reasonable value, but this should be configurable
+	    // this is required to obtain a uniform experience across browsers. 60 seconds seem like a reasonable value, but this should be configurable
         timeout: 60000, // optional
 
     	// required:

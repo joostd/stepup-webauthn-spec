@@ -116,7 +116,7 @@ function bufferToHex (buffer) {
 // sample arguments for login
 var getCredentialDefaultArgs = {
     publicKey: {
-       	// this is required for SURFsecureID to obtain a uniform experience across browsers. 60 seconds seem like a reasonable value, but this should be configurable
+       	// this is required to obtain a uniform experience across browsers. 60 seconds seem like a reasonable value, but this should be configurable
         timeout: 60000,
         // allowCredentials: retrieved from storage
         // can be multiple credentials but for now we only consider one credential per account
