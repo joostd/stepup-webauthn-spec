@@ -21,5 +21,7 @@ $userfile = "/tmp/" . bin2hex($user_id) . ".json";
 file_put_contents($userfile, json_encode($entry));
 symlink($userfile, "/tmp/$user_name.json");            
 
+echo "$displayName ($user_name/" . bin2hex($user_id) . ")";
 ?>
-<a href='login.php'>login</a> | <a href='register.php'>register</a>
+<br/>
+<a href='login.php'>login</a> | <a href='logout.php'>logout</a> | <a href='register.php'>register</a>

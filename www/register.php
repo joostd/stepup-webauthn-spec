@@ -74,8 +74,8 @@ if( isset($_POST['credId']) ) { // new registration with credId, clientDataJSON,
     $ed = ($flags & 0x80); // extensions
     assert( $up ); // user presence: UP == 1
     error_log("ED=$ed AT=$at UV=$uv UP=$up");
-    assert( !$ed ); // no extensions
-    
+    error_log( "extensions" . ($ed ? "" : " not") . " present" );
+
     $signCount = shiftn($s,4);
     error_log('signCount = ' . bin2hex($signCount));
     $signCount = unpack("N",$signCount)[1]; // unsigned long (always 32 bit, big endian byte order)
@@ -95,17 +95,37 @@ if( isset($_POST['credId']) ) { // new registration with credId, clientDataJSON,
     error_log("length = $length");
     $credentialId = shiftn($s,$length);
     error_log("credentialId = " . bin2hex($credentialId));
-    $credentialPublicKey = $s;
-    error_log('credentialPublicKey = ' . bin2hex($credentialPublicKey));
-    $credentialPublicKey = \CBOR\CBOREncoder::decode($credentialPublicKey);
-    
+    error_log('credentialPublicKey = ' . bin2hex($s)); // if no extensions
+    $credentialPublicKey = \CBOR\CBOREncoder::decode($s); // note that credentialPublicKey may be followed by extensions
     assert($credentialPublicKey[KTY] == EC2);
     assert($credentialPublicKey[ALG] == ES256);
     assert($credentialPublicKey[CRV] == P256);
     $x = bin2hex($credentialPublicKey[X]->get_byte_string());
     $y = bin2hex($credentialPublicKey[Y]->get_byte_string());
     error_log("x=$x; y=$y");
+
+    $prefix = \CBOR\CBOREncoder::encode($credentialPublicKey); // there is probably a cleaner way to do this...
+    error_log('credentialPublicKey = ' . bin2hex($prefix));
+    // shiftn($s,strlen($prefix)); // remove credentialPublicKey bytes
+    $extensions = null;
+    if (strlen($s) > 0) { 
+        error_log('extensions = ' . bin2hex($s));
+        $extensions = \CBOR\CBOREncoder::decode($s);
+    }
+    if( isset($extensions['credProtect']) ) {
+        error_log( "credProtect extension with value:" );
+        switch($extensions['credProtect']) {
+            case 0x01:
+                error_log( "userVerificationOptional" );
+
+            case 0x02:
+                error_log( "userVerificationOptionalWithCredentialIDList" );
     
+        }
+    } else
+        error_log( print_r( $extensions, true ));
+
+
     if( $attestationObject['fmt'] === "packed") { // process packed attestation
         if( array_key_exists('x5c', $attStmt)) { // Attestation types Basic, AttCA - supported
             // attStmt contains alg, sig, x5c (for full attestation)
