@@ -1,6 +1,8 @@
 <?php
 session_start();
 
+// auto-login for non-passwordless scenarios
+
 error_log("generating new user handle");
 $user_id = random_bytes(16);  // A user handle is an opaque byte sequence with a maximum size of 64 bytes. 
 $_SESSION['user_id'] = $user_id;
@@ -24,4 +26,6 @@ symlink($userfile, "/tmp/$user_name.json");
 echo "$displayName ($user_name/" . bin2hex($user_id) . ")";
 ?>
 <br/>
-<a href='login.php'>login</a> | <a href='logout.php'>logout</a> | <a href='register.php'>register</a>
+<a href='logout.php'>logout</a> |
+<a href='get.php'>get credential</a> | 
+<a href='create.php'>create credential</a>

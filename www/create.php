@@ -8,8 +8,8 @@ use CBOR\CBOREncoder;
 session_start();
 
 if(!isset($_SESSION['user_id'])) {
-    echo "<b>create a user first</b>";
-    echo "<a href='restart.php'>restart</a>";
+    echo "<b>please login first</b>";
+    echo "<a href='login.php'>login</a>";
     exit();
 }
 
@@ -304,7 +304,7 @@ if( isset($_POST['credId']) ) { // new registration with credId, clientDataJSON,
     error_log(print_r($entry,TRUE));
     file_put_contents($userfile, json_encode($entry));
 
-    echo "$displayName ($user_name/" . bin2hex($user_id) . ") <a href='login.php'>login</a> | <a href='register.php'>register</a> | <a href='restart.php'>restart</a>";
+    echo "$displayName ($user_name/" . bin2hex($user_id) . ") <a href='get.php'>get credential</a> | <a href='create.php'>create credential</a> | <a href='login.php'>login</a>";
     exit();
 }
 ?>
@@ -371,7 +371,7 @@ var createCredentialDefaultArgs = {
 
         // optional:
         authenticatorSelection: {
-        //  requireResidentKey: true, // default is false
+        //   requireResidentKey: true, // default is false
           userVerification: "discouraged", // default is preferred
           authenticatorAttachment: "cross-platform", // either platform or cross-platform
         },

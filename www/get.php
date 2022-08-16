@@ -108,8 +108,9 @@ if( isset($_POST['signature']) ) { // new login with signature, clientDataJSON, 
 
     if( $validCredential === TRUE)
         echo "<b>valid assertion</b><br/>";
-    echo "$displayName ($user_name/" . bin2hex($user_id) . ") <a href='login.php'>login</a> | <a href='register.php'>register</a> | <a href='restart.php'>restart</a>";
-    exit();
+        echo "$displayName ($user_name/" . bin2hex($user_id) . ") [#signatures: " . $signCount . "]<br/>";
+        echo "<a href='logout.php'>logout</a> | <a href='get.php'>get credential</a> | <a href='create.php'>create credential</a>";
+        exit();
 }
 
 $challenge = random_bytes(32); // must be a cryptographically random number sent from a server
