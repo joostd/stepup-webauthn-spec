@@ -5,6 +5,21 @@ include("../common.php");
 use Base64Url\Base64Url;
 use CBOR\CBOREncoder;
 
+function pubkeyEC2($x, $y) {
+    $der  = "\x30\x59\x30\x13\x06\x07\x2a\x86\x48\xce\x3d\x02\x01";
+    $der .= "\x06\x08\x2a\x86\x48\xce\x3d\x03\x01\x07\x03\x42";
+    $der .= "\x00". chr(4).$x.$y;
+    $pem  = "-----BEGIN PUBLIC KEY-----\x0A";
+    $pem .= chunk_split(base64_encode($der), 64, "\x0A");
+    $pem .= "-----END PUBLIC KEY-----\x0A";
+    // error_log("\n\n".$pem);
+    $publicKey = openssl_pkey_get_public($pem);
+    while($msg = openssl_error_string() !== false) error_log("openssl error: $msg"); # flush openssl errors
+    assert($publicKey!==FALSE);
+    // error_log("openssl_pkey_get_details:" . print_r(openssl_pkey_get_details($publicKey), TRUE));
+    return $publicKey;
+}
+
 session_start();
 
 if( array_key_exists('user_id',$_SESSION)) {
@@ -12,7 +27,7 @@ if( array_key_exists('user_id',$_SESSION)) {
     error_log("user id: " . bin2hex($user_id));
 } else {
     error_log("user id unavailable"); // instruct user to register first (ignored here, as we have a single entry)
-exit();
+    exit();
 }
 
 $userfile = "/tmp/" . bin2hex($user_id) . ".json";
@@ -20,6 +35,9 @@ error_log("retrieving user info from file $userfile");
 $entry = json_decode( file_get_contents($userfile), TRUE);
 $user_name = $entry['user']['name'];
 $displayName = $entry['user']['displayName'];
+$credentials = $entry['credentials'];
+$credential_ids = array_keys($credentials);
+error_log(print_r($credential_ids,TRUE));
 
 if( isset($_POST['signature']) ) { // new login with signature, clientDataJSON, and authenticatorData
     error_log(print_r($_POST,true));
@@ -40,6 +58,7 @@ if( isset($_POST['signature']) ) { // new login with signature, clientDataJSON, 
     $s = $authenticatorData; // we're gonna destructively update $s
     $rpIdHash = shiftn($s,32);
     error_log('rpIdHash = ' . bin2hex($rpIdHash));
+        // $hashId = hash('sha256', $_SERVER['HTTP_ORIGIN'], TRUE);
     $flags = shiftn($s,1);
     error_log('flags = ' . bin2hex($flags));
     assert($flags && 0x01 === 0x01); // user presence: UP == 1
@@ -47,65 +66,57 @@ if( isset($_POST['signature']) ) { // new login with signature, clientDataJSON, 
     error_log('signCount = ' . bin2hex($signCount));
     $signCount = unpack("N",$signCount)[1]; // unsigned long (always 32 bit, big endian byte order)
     error_log('signCount = ' . ($signCount));
-    // check and update signcount
-    if( $signCount > 0) {
-        assert( $signCount > $entry['credential']['signCount']); // using numerical ordering here
-        $entry['credential']['signCount'] = $signCount;    
-    } else {
-        error_log('signCount ignored');
-    }
+
     assert( $s === ''); // no extensions
 
-    // TODO: verify signature over response 
     // verify that sig is a valid signature over the binary concatenation of authData and hash.
-    $hash = hash( 'sha256', $authenticatorData . $clientDataJSON, true );
-    error_log("hash=".bin2hex($hash));
-
-    // $hashId = hash('sha256', $_SERVER['HTTP_ORIGIN'], TRUE);
-    // $signeddata = $authData . hash('sha256', $clientData, TRUE);
 
     // 3.	Using credential’s id attribute (or the corresponding rawId, if base64url encoding is inappropriate for your use case), look up the corresponding credential public key.
 
-    $x = hex2bin($entry['credential']['x']);
-    $y = hex2bin($entry['credential']['y']);
-    error_log("x=".bin2hex($x));
-    error_log("y=".bin2hex($y));
-
-    $der  = "\x30\x59\x30\x13\x06\x07\x2a\x86\x48\xce\x3d\x02\x01";
-    $der .= "\x06\x08\x2a\x86\x48\xce\x3d\x03\x01\x07\x03\x42";
-    $der .= "\x00". chr(4).$x.$y;
-    $pem  = "-----BEGIN PUBLIC KEY-----\x0A";
-    $pem .= chunk_split(base64_encode($der), 64, "\x0A");
-    $pem .= "-----END PUBLIC KEY-----\x0A";
-    error_log("\n\n".$pem);
-
-    // 4.	Let cData, authData and sig denote the value of credential’s response's clientDataJSON, authenticatorData, and signature respectively.
-    // 15.	Let hash be the result of computing a hash over the cData using SHA-256.
     $hash = hash( 'sha256', $clientDataJSON, true );
-    // 16. Using the credential public $key looked up in step 3, verify that sig is a valid signature over the binary concatenation of authData and hash.
-    error_log("data=".bin2hex($authenticatorData . $hash));
+    $signedData = $authenticatorData . $hash;
+    error_log("signed data=".bin2hex($signedData));
     error_log("signature=".bin2hex($signature));
-    $publicKey = openssl_pkey_get_public($pem);
-    while($msg = openssl_error_string() !== false) error_log("openssl error: $msg"); # flush openssl errors
-    assert($publicKey!==FALSE);
-    // error_log("openssl_pkey_get_details:" . print_r(openssl_pkey_get_details($publicKey), TRUE));
-    $result = openssl_verify($authenticatorData . $hash, $signature, $publicKey, OPENSSL_ALGO_SHA256);
-    while($msg = openssl_error_string() !== false) error_log("openssl error: $msg"); # flush openssl errors
-    error_log(print_r("verify:".$result,TRUE));
-    assert($result===1);
+
+    $validCredential = FALSE;
+    foreach( $credential_ids as $credential_id) {
+        $x = hex2bin($entry['credentials'][$credential_id]['x']);
+        $y = hex2bin($entry['credentials'][$credential_id]['y']);
+        error_log("x=".bin2hex($x));
+        error_log("y=".bin2hex($y));
+        $publicKey = pubkeyEC2($x,$y);
+        $result = openssl_verify($signedData, $signature, $publicKey, OPENSSL_ALGO_SHA256);
+        while($msg = openssl_error_string() !== false) error_log("openssl error: $msg"); # flush openssl errors
+        error_log(print_r("verify:".$result,TRUE));
+        if ($result===1) {
+            $validCredential = TRUE;
+            error_log("valid signature for credential $credential_id");
+            // check and update signcount
+            if( $signCount > 0) {
+                assert( $signCount > $entry['credentials'][$credential_id]['signCount']); // using numerical ordering here
+                $entry['credentials'][$credential_id]['signCount'] = $signCount;    
+            } else {
+                error_log('signCount ignored');
+            }
+            break; // look no further
+        }
+    }
 
     // updating account store
-    error_log(print_r($entry,TRUE));
+    // error_log(print_r($entry,TRUE));
     file_put_contents($userfile, json_encode($entry));
-    echo "$displayName ($user_name/" . bin2hex($user_id) . ") <a href='login.php'>login</a> | <a href='register.php'>register</a> | <a href='restart.php'>restart</a>";
 
+    if( $validCredential === TRUE)
+        echo "<b>valid assertion</b><br/>";
+    echo "$displayName ($user_name/" . bin2hex($user_id) . ") <a href='login.php'>login</a> | <a href='register.php'>register</a> | <a href='restart.php'>restart</a>";
     exit();
 }
 
 $challenge = random_bytes(32); // must be a cryptographically random number sent from a server
 error_log(bin2hex($challenge));
 $_SESSION['challenge'] = $challenge;
-$credential_id = hex2bin($entry['credential']['id']);
+
+
 ?>
 <!-- client side part -->
 <script>
@@ -126,11 +137,13 @@ var getCredentialDefaultArgs = {
         // can be multiple credentials but for now we only consider one credential per account
         // can also be empty for passwordless credentials, but we ignore those as well
         allowCredentials: [
+    <?php foreach($credential_ids as $credential_id): ?>
             {
-                id: new Uint8Array([ <?= bin2intList($credential_id) ?> ]).buffer,
+                id: new Uint8Array([ <?= bin2intList(hex2bin($credential_id)) ?> ]).buffer,
                 transports: ["usb", "nfc", "ble"],
                 type: "public-key"
-            }
+            },
+    <?php endforeach; ?>
         ],
         // required:
         challenge: new Uint8Array([ <?= bin2intList($challenge) ?> ]).buffer,
@@ -156,9 +169,12 @@ navigator.credentials.get(getCredentialDefaultArgs)
         console.log("clientDataJSON: " + bufferToHex(assertion.response.clientDataJSON));
         console.log("signature: " + bufferToHex(assertion.response.signature));
         console.log("authenticatorData: " + bufferToHex(assertion.response.authenticatorData));
+        console.log("userHandle: " + bufferToHex(assertion.response.userHandle)); // empty unless discoverable credential was used
         document.getElementById("loginForm").elements.namedItem("clientDataJSON").value = bufferToHex(assertion.response.clientDataJSON);
         document.getElementById("loginForm").elements.namedItem("signature").value = bufferToHex(assertion.response.signature);
         document.getElementById("loginForm").elements.namedItem("authenticatorData").value = bufferToHex(assertion.response.authenticatorData);
+        document.getElementById("loginForm").elements.namedItem("userHandle").value = bufferToHex(assertion.response.userHandle);
+
     }).catch((err) => {
         console.log("ERROR", err);
     });
@@ -174,6 +190,7 @@ navigator.credentials.get(getCredentialDefaultArgs)
     <input type="hidden" name="clientDataJSON" value="" />
     <input type="hidden" name="signature" value="" />
     <input type="hidden" name="authenticatorData" value="" />
+    <input type="hidden" name="userHandle" value="usedfordiscoverablecredentials" />
     <input type="submit" value="submit" />
 </form>
 
