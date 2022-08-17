@@ -20,27 +20,39 @@ function pubkeyEC2($x, $y) {
     return $publicKey;
 }
 
-session_start();
-
-if( array_key_exists('user_id',$_SESSION)) {
-    $user_id = $_SESSION['user_id'];
-    error_log("user id: " . bin2hex($user_id));
-} else {
-    error_log("user id unavailable"); // instruct user to register first (ignored here, as we have a single entry)
-    exit();
+function getUserById($id) { // $id in hex encoding
+    $userfile = "/tmp/$id.json";
+    error_log("retrieving user info from file $userfile");
+    return json_decode( file_get_contents($userfile), TRUE);
 }
 
-$userfile = "/tmp/" . bin2hex($user_id) . ".json";
-error_log("retrieving user info from file $userfile");
-$entry = json_decode( file_get_contents($userfile), TRUE);
-$user_name = $entry['user']['name'];
-$displayName = $entry['user']['displayName'];
-$credentials = $entry['credentials'];
-$credential_ids = array_keys($credentials);
-error_log(print_r($credential_ids,TRUE));
+function updateUser($user) { // $id in hex encoding
+    $userfile = "/tmp/" . $user['user']['id'] . ".json";
+    error_log("storing user info in file $userfile");
+    file_put_contents($userfile, json_encode($user));
+}
+
+session_start();
+
+// $user_id = null;
+$credential_ids = [];
+
+if( array_key_exists('user_id',$_SESSION)) { // logged in, so require a credential from a specific user
+    $user_id = $_SESSION['user_id'];
+    error_log("user id: " . bin2hex($user_id));
+    $user = getUserById(bin2hex($user_id));
+    $credential_ids = array_keys($user['credentials']);
+    error_log(print_r($credential_ids,TRUE));
+}
 
 if( isset($_POST['signature']) ) { // new login with signature, clientDataJSON, and authenticatorData
     error_log(print_r($_POST,true));
+    if( array_key_exists('userHandle',$_POST)) { // we have a passwordless login attempt
+        $userHandle = $_POST['userHandle'];
+    }
+    if( isset($user_id) && isset($userHandle) )
+        assert($user_id === $userHandle); // detect manipulation of post parameters. Passwordless should only be triggered when not logged in
+    
     $signature = hex2bin($_POST['signature']);
 
     // clientDataJSON, containing type, challenge, and origin
@@ -70,7 +82,6 @@ if( isset($_POST['signature']) ) { // new login with signature, clientDataJSON, 
     assert( $s === ''); // no extensions
 
     // verify that sig is a valid signature over the binary concatenation of authData and hash.
-
     // 3.	Using credential’s id attribute (or the corresponding rawId, if base64url encoding is inappropriate for your use case), look up the corresponding credential public key.
 
     $hash = hash( 'sha256', $clientDataJSON, true );
@@ -78,10 +89,23 @@ if( isset($_POST['signature']) ) { // new login with signature, clientDataJSON, 
     error_log("signed data=".bin2hex($signedData));
     error_log("signature=".bin2hex($signature));
 
+    if( isset($user_id) ) {
+        $user = getUserById(bin2hex($user_id));
+    } else if( isset($userHandle) ) {
+        $user = getUserById( $userHandle );
+    } else {
+        //???
+    }
+    $user_name = $user['user']['name'];
+    $displayName = $user['user']['displayName'];
+    $credentials = $user['credentials'];
+    $credential_ids = array_keys($credentials);
+    error_log(print_r($credential_ids,TRUE));
+
     $validCredential = FALSE;
     foreach( $credential_ids as $credential_id) {
-        $x = hex2bin($entry['credentials'][$credential_id]['x']);
-        $y = hex2bin($entry['credentials'][$credential_id]['y']);
+        $x = hex2bin($user['credentials'][$credential_id]['x']);
+        $y = hex2bin($user['credentials'][$credential_id]['y']);
         error_log("x=".bin2hex($x));
         error_log("y=".bin2hex($y));
         $publicKey = pubkeyEC2($x,$y);
@@ -90,11 +114,12 @@ if( isset($_POST['signature']) ) { // new login with signature, clientDataJSON, 
         error_log(print_r("verify:".$result,TRUE));
         if ($result===1) {
             $validCredential = TRUE;
+            if( $user_id === null ) $user_id = hex2bin($userHandle);
             error_log("valid signature for credential $credential_id");
             // check and update signcount
             if( $signCount > 0) {
-                assert( $signCount > $entry['credentials'][$credential_id]['signCount']); // using numerical ordering here
-                $entry['credentials'][$credential_id]['signCount'] = $signCount;    
+                assert( $signCount > $user['credentials'][$credential_id]['signCount']); // using numerical ordering here
+                $user['credentials'][$credential_id]['signCount'] = $signCount;    
             } else {
                 error_log('signCount ignored');
             }
@@ -103,8 +128,8 @@ if( isset($_POST['signature']) ) { // new login with signature, clientDataJSON, 
     }
 
     // updating account store
-    // error_log(print_r($entry,TRUE));
-    file_put_contents($userfile, json_encode($entry));
+    // error_log(print_r($user,TRUE));
+    updateUser($user);
 
     if( $validCredential === TRUE)
         echo "<b>valid assertion</b><br/>";
