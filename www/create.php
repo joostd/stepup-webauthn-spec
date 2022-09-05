@@ -398,6 +398,8 @@ var makeCreds = () => {
 
     navigator.credentials.create(createCredentialDefaultArgs)
     .then((cred) => {
+	//console.log(cred.toJSON()); // level 3
+	console.log("authenticatorAttachment: " + cred.authenticatorAttachment); // level 2
         console.log(cred); // PublicKeyCredential
         // id and type inherited from Credential interface
         console.log("id: " + cred.id); // base64urlencoded
